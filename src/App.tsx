@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Plus, Settings, ChevronDown, Check, Trash2, Calendar, CalendarCheck, LayoutPanelLeft, ChevronLeft, ChevronRight, Palette, Clock, AlertTriangle, GripVertical } from 'lucide-react'
+import { Plus, Settings, ChevronDown, Check, Trash2, Calendar, LayoutPanelLeft, ChevronLeft, ChevronRight, Palette, Clock, AlertTriangle, GripVertical, EyeOff, Eye } from 'lucide-react'
 
 declare global {
   interface Window {
@@ -15,8 +15,14 @@ declare global {
       getGoogleUser: () => Promise<any>
       syncTasks: (tasks: Task[]) => Promise<any>
       fetchGoogleTasks: () => Promise<any>
+      fetchCalendarUpdates: (taskEventIds: { taskId: string; googleCalendarEventId: string }[]) => Promise<any>
       saveGoogleCredentials: (creds: { clientId: string, clientSecret: string }) => Promise<any>
-      deleteGoogleTask: (googleTaskId: string) => Promise<{ success: boolean }>
+      deleteGoogleTask: (payload: { googleTaskId: string; googleCalendarEventId?: string } | string) => Promise<{ success: boolean }>
+      getAutostart: () => Promise<boolean>
+      setAutostart: (enable: boolean) => Promise<{ success: boolean; enabled: boolean }>
+      openDashboard: () => Promise<void>
+      hideWidget: () => Promise<void>
+      uninstallApp: () => Promise<any>
     }
   }
 }
@@ -27,6 +33,7 @@ type Task = {
   date: string
   completed: boolean
   googleTaskId?: string
+  googleCalendarEventId?: string
 }
 
 const GoogleCalendarLogo = ({ className }: { className?: string }) => (
@@ -95,6 +102,11 @@ function App() {
   const [showGoogleCredentials, setShowGoogleCredentials] = useState(false)
   const [tempClientId, setTempClientId] = useState('')
   const [tempClientSecret, setTempClientSecret] = useState('')
+  const [isGhostMode, setIsGhostMode] = useState(localStorage.getItem('ghostMode') === 'true')
+
+  useEffect(() => {
+    localStorage.setItem('ghostMode', String(isGhostMode))
+  }, [isGhostMode])
 
   // Refs para polling (evitar closures desactualizados)
   const tasksRef = useRef<Task[]>(tasks)
@@ -411,16 +423,35 @@ function App() {
     return merged
   }
 
-  // Polling: sincroniza Google → Widget cada 30 segundos
+  // Polling: sincroniza Google Tasks + Calendar → Widget cada 30 segundos
   useEffect(() => {
     if (!isGoogleConnected) return
 
     const poll = async () => {
       if (!isGoogleConnectedRef.current || !window.electronAPI?.fetchGoogleTasks) return
+
       const res = await window.electronAPI.fetchGoogleTasks()
       if (!res.success) return
 
-      const merged = mergeWithGoogleTasks(tasksRef.current, res.tasks)
+      let merged = mergeWithGoogleTasks(tasksRef.current, res.tasks)
+
+      // Also check Google Calendar for date changes (bidirectional calendar sync)
+      const tasksWithEvents = tasksRef.current
+        .filter(t => t.googleCalendarEventId)
+        .map(t => ({ taskId: t.id, googleCalendarEventId: t.googleCalendarEventId! }))
+
+      if (tasksWithEvents.length > 0 && window.electronAPI.fetchCalendarUpdates) {
+        const calRes = await window.electronAPI.fetchCalendarUpdates(tasksWithEvents)
+        if (calRes.success && calRes.updates) {
+          for (const update of calRes.updates) {
+            merged = merged.map((t: Task) =>
+              t.id === update.taskId && t.date !== update.date
+                ? { ...t, date: update.date }
+                : t
+            )
+          }
+        }
+      }
 
       // Solo actualizar si hubo cambios reales
       if (JSON.stringify(merged) !== JSON.stringify(tasksRef.current)) {
@@ -463,7 +494,10 @@ function App() {
   const deleteTask = async (id: string) => {
     const task = tasks.find(t => t.id === id)
     if (task?.googleTaskId && isGoogleConnected && window.electronAPI?.deleteGoogleTask) {
-      await window.electronAPI.deleteGoogleTask(task.googleTaskId)
+      await window.electronAPI.deleteGoogleTask({
+        googleTaskId: task.googleTaskId,
+        googleCalendarEventId: task.googleCalendarEventId
+      })
     }
     updateTasks(tasks.filter(t => t.id !== id))
   }
@@ -582,12 +616,76 @@ function App() {
           background-color: #cbd5e1;
           border-radius: 10px;
         }
+        ${isGhostMode ? `
+        .ghost-mode .ghost-main {
+          background-color: rgba(255, 255, 255, 0.30) !important;
+          backdrop-filter: blur(16px) saturate(180%) !important;
+          -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
+          border-color: rgba(255, 255, 255, 0.1) !important;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+        }
+        .ghost-mode .ghost-main * {
+          background-color: transparent !important;
+          border-color: rgba(255, 255, 255, 0.2) !important;
+          color: rgba(255, 255, 255, 0.9) !important;
+          box-shadow: none !important;
+        }
+
+        /* Inputs */
+        .ghost-mode .ghost-main input {
+          background-color: rgba(255, 255, 255, 0.15) !important;
+          border-color: rgba(255, 255, 255, 0.3) !important;
+          color: #ffffff !important;
+        }
+        .ghost-mode .ghost-main input:focus {
+          background-color: rgba(255, 255, 255, 0.25) !important;
+          border-color: rgba(255, 255, 255, 0.6) !important;
+        }
+
+        /* Buttons Hover */
+        .ghost-mode .ghost-main button:hover {
+          background-color: rgba(255, 255, 255, 0.15) !important;
+        }
+
+        /* Primary Theme Elements (like '+' button) */
+        .ghost-mode .ghost-main .bg-\\[var\\(--theme-bg\\)\\] {
+          background-color: rgba(255, 255, 255, 0.25) !important;
+          border-color: rgba(255, 255, 255, 0.4) !important;
+        }
+        .ghost-mode .ghost-main .bg-\\[var\\(--theme-bg\\)\\]:hover {
+          background-color: rgba(255, 255, 255, 0.4) !important;
+        }
+
+        /* Task Items */
+        .ghost-mode .ghost-main .task-item {
+          background-color: rgba(255, 255, 255, 0.08) !important;
+          border-color: rgba(255, 255, 255, 0.15) !important;
+        }
+        .ghost-mode .ghost-main .task-item:hover {
+          background-color: rgba(255, 255, 255, 0.15) !important;
+        }
+        .ghost-mode .ghost-ribbon {
+          background-color: transparent !important;
+          border-color: transparent !important;
+          color: rgba(255, 255, 255, 0.6) !important;
+          box-shadow: none !important;
+        }
+        .ghost-mode svg, .ghost-mode svg * {
+          stroke: rgba(255, 255, 255, 0.7) !important;
+        }
+        .ghost-mode input::placeholder {
+          color: rgba(255, 255, 255, 0.4) !important;
+        }
+        .ghost-mode .fill-current {
+          fill: rgba(255, 255, 255, 0.7) !important;
+        }
+        ` : ''}
       `}</style>
 
-      <div className="relative flex flex-col items-center">
+      <div className={`relative flex flex-col items-center ${isGhostMode ? 'ghost-mode' : ''}`}>
         {/* Widget Container */}
         <div
-          className={`relative z-10 w-[420px] ${isDragging ? '' : 'transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]'} bg-white rounded-[24px] border border-gray-200 flex pt-3 px-3 pb-0 shadow-[0_4px_0_rgb(229,231,235)] ${expanded ? 'max-h-[560px]' : 'max-h-[100px]'} ${isReversed ? 'flex-col-reverse' : 'flex-col'}`}
+          className={`relative z-10 w-[420px] ghost-main ${isDragging ? '' : 'transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]'} bg-white rounded-[24px] border border-gray-200 flex pt-3 px-3 pb-0 shadow-[0_4px_0_rgb(229,231,235)] ${expanded ? 'max-h-[560px]' : 'max-h-[100px]'} ${isReversed ? 'flex-col-reverse' : 'flex-col'}`}
         >
 
 
@@ -655,13 +753,31 @@ function App() {
               </div>
             </div>
 
-            {/* Handle area - JS-based dragging for perfect cursor and hover interaction */}
-            <div
-              ref={gripRef}
-              onMouseDown={handleDragStart}
-              className="relative flex justify-center items-center h-8 w-12 group mx-auto cursor-grab active:cursor-grabbing transition-all select-none"
-            >
-              <GripVertical className="text-gray-300 rotate-90 transition-all duration-200 group-hover:text-gray-600 group-active:text-gray-900" size={18} strokeWidth={3} />
+            {/* Handle area with quick-action buttons */}
+            <div className="flex items-center justify-between w-full px-1 h-8">
+              <button
+                onClick={() => window.electronAPI?.openDashboard()}
+                title="Panel de control"
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-all"
+              >
+                <LayoutPanelLeft size={14} strokeWidth={2.5} />
+              </button>
+
+              <div
+                ref={gripRef}
+                onMouseDown={handleDragStart}
+                className="flex items-center justify-center h-8 w-10 group cursor-grab active:cursor-grabbing select-none"
+              >
+                <GripVertical className="text-gray-300 rotate-90 transition-all duration-200 group-hover:text-gray-600 group-active:text-gray-900" size={18} strokeWidth={3} />
+              </div>
+
+              <button
+                onClick={() => setIsGhostMode(!isGhostMode)}
+                title={isGhostMode ? 'Desactivar modo transparente' : 'Activar modo transparente'}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-300 hover:text-gray-600 hover:bg-gray-100 transition-all"
+              >
+                {isGhostMode ? <Eye size={14} strokeWidth={2.5} /> : <EyeOff size={14} strokeWidth={2.5} />}
+              </button>
             </div>
           </div>
 
@@ -898,7 +1014,7 @@ function App() {
         </div>
 
         {/* Counter Ribbon */}
-        <div className={`absolute z-0 bg-[var(--theme-bg)] border border-[var(--theme-bg)] text-[var(--theme-text)] font-bold text-[10px] px-5 shadow-[0_3px_0_var(--theme-shadow)] ${isDragging ? '' : 'transition-all duration-500 ease-in-out'} whitespace-nowrap ${isReversed
+        <div className={`absolute z-0 ghost-ribbon bg-[var(--theme-bg)] border border-[var(--theme-bg)] text-[var(--theme-text)] font-bold text-[10px] px-5 shadow-[0_3px_0_var(--theme-shadow)] ${isDragging ? '' : 'transition-all duration-500 ease-in-out'} whitespace-nowrap ${isReversed
           ? 'bottom-[calc(100%-16px)] pb-6 pt-1.5 rounded-t-[16px]'
           : 'top-[calc(100%-16px)] pt-6 pb-1.5 rounded-b-[16px]'
           }`}>
@@ -988,7 +1104,7 @@ function TaskItem({
   return (
     <div
       onClick={onToggle}
-      className={`relative flex items-center gap-2.5 px-3 py-2 border border-gray-200 rounded-[14px] no-drag-region group transition-all cursor-pointer hover:bg-gray-50 active:translate-y-[2px] active:shadow-[0_0px_0_rgb(229,231,235)] bg-white ${task.completed
+      className={`task-item relative flex items-center gap-2.5 px-3 py-2 border border-gray-200 rounded-[14px] no-drag-region group transition-all cursor-pointer hover:bg-gray-50 active:translate-y-[2px] active:shadow-[0_0px_0_rgb(229,231,235)] bg-white ${task.completed
         ? 'shadow-[0_0px_0_rgb(229,231,235)] translate-y-[2px] bg-gray-50/50'
         : 'shadow-[0_2px_0_rgb(229,231,235)]'
         }`}

@@ -8,6 +8,32 @@
     "build": "tsc && vite build && electron-builder",
     "serve": "electron ."
   },
+  "build": {
+    "appId": "com.reddy.widget",
+    "productName": "Reddy",
+    "copyright": "Copyright © 2025 Reddy",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      { "from": "build/icon.ico", "to": "icon.ico" }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}.${ext}",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    }
+  },
   "dependencies": {
     "@types/node": "^25.6.0",
     "date-fns": "^3.6.0",
@@ -24,6 +50,7 @@
     "autoprefixer": "^10.4.19",
     "electron": "^30.0.1",
     "electron-builder": "^24.13.3",
+    "png-to-ico": "^3.0.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "typescript": "^5.2.2",
